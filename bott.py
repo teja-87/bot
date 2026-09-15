@@ -5,8 +5,8 @@ import statistics
 import http.client
 import ssl
 
-HOST = "rpc.mainnet.chain.robinhood.com"
-PATH = "/"
+HOST = "sequencer.mainnet.chain.robinhood.com"
+
 REQUESTS = 30
 INTERVAL = 1.0
 
@@ -26,7 +26,7 @@ def rpc_request(conn):
     try:
         conn.request(
             "POST",
-            PATH,
+            "/",
             body=body,
             headers={
                 "Content-Type": "application/json",
@@ -57,8 +57,8 @@ def percentile(values, percent):
 def main():
 
     if len(sys.argv) < 2:
-        print("Usage: python latency_persistent.py <region>")
-        print("Example: python latency_persistent.py ohio")
+        print("Usage: python sequencer_latency.py <region>")
+        print("Example: python sequencer_latency.py ohio")
         return
 
     region = sys.argv[1]
@@ -103,7 +103,9 @@ def main():
         latency, status = rpc_request(conn)
 
         if latency is not None:
+
             results.append(latency)
+
             print(
                 f"{i + 1:02d}/{REQUESTS}: "
                 f"{latency:.2f} ms "
