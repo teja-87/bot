@@ -1,19 +1,17 @@
-
+import sys
 import json
-import statistics
 import time
-import urllib.request
-import urllib.error
+import statistics
+import http.client
+import ssl
 
-# Robinhood Chain public mainnet RPC
-RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
+HOST = "rpc.mainnet.chain.robinhood.com"
+PATH = "/"
+REQUESTS = 30
+INTERVAL = 1.0
 
-# Number of requests to send
-REQUESTS = 50
 
-# Wait between requests, in seconds
-INTERVAL = 0.2
-def rpc_call():
+def rpc_request(conn):
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -21,71 +19,119 @@ def rpc_call():
         "params": []
     }
 
-    data = json.dumps(payload).encode("utf-8")
-
-    request = urllib.request.Request(
-        RPC_URL,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0"
-        },
-        method="POST"
-    )
+    body = json.dumps(payload)
 
     start = time.perf_counter()
 
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            response.read()
+        conn.request(
+            "POST",
+            PATH,
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "latency-test"
+            }
+        )
 
-        return (time.perf_counter() - start) * 1000
+        response = conn.getresponse()
+        response.read()
 
-    except urllib.error.HTTPError as e:
-        print(f"HTTP {e.code}")
-        print(e.read().decode(errors="ignore"))
-        return None
+        latency = (time.perf_counter() - start) * 1000
+
+        return latency, response.status
 
     except Exception as e:
         print(f"Request failed: {e}")
-        return None
+        return None, None
+
+
+def percentile(values, percent):
+    values = sorted(values)
+    index = int(len(values) * percent / 100)
+    index = min(index, len(values) - 1)
+    return values[index]
+
 
 def main():
-    results = []
 
-    print(f"Testing: {RPC_URL}")
+    if len(sys.argv) < 2:
+        print("Usage: python latency_persistent.py <region>")
+        print("Example: python latency_persistent.py ohio")
+        return
+
+    region = sys.argv[1]
+
+    print(f"Region: {region}")
+    print(f"Target: https://{HOST}")
     print(f"Requests: {REQUESTS}")
     print()
 
+    context = ssl.create_default_context()
+
+    conn = http.client.HTTPSConnection(
+        HOST,
+        timeout=10,
+        context=context
+    )
+
+    # -------------------------
+    # WARM-UP
+    # -------------------------
+
+    print("Opening connection...")
+
+    latency, status = rpc_request(conn)
+
+    if latency is None:
+        print("Warm-up failed.")
+        conn.close()
+        return
+
+    print(f"Warm-up: {latency:.2f} ms (HTTP {status})")
+    print()
+
+    # -------------------------
+    # MEASURE
+    # -------------------------
+
+    results = []
+
     for i in range(REQUESTS):
-        latency = rpc_call()
+
+        latency, status = rpc_request(conn)
 
         if latency is not None:
             results.append(latency)
-            print(f"{i + 1:02d}/{REQUESTS}  {latency:.2f} ms")
+            print(
+                f"{i + 1:02d}/{REQUESTS}: "
+                f"{latency:.2f} ms "
+                f"(HTTP {status})"
+            )
 
         time.sleep(INTERVAL)
+
+    conn.close()
+
+    # -------------------------
+    # RESULTS
+    # -------------------------
 
     if not results:
         print("No successful requests.")
         return
 
-    results.sort()
-
-    p50 = statistics.median(results)
-    p95 = results[int(len(results) * 0.95) - 1]
-    p99 = results[int(len(results) * 0.99) - 1]
-
     print()
     print("========== RESULTS ==========")
+
     print(f"Successful: {len(results)}/{REQUESTS}")
-    print(f"Minimum:    {min(results):.2f} ms")
+    print(f"Min:        {min(results):.2f} ms")
     print(f"Average:    {statistics.mean(results):.2f} ms")
-    print(f"P50:        {p50:.2f} ms")
-    print(f"P95:        {p95:.2f} ms")
-    print(f"P99:        {p99:.2f} ms")
-    print(f"Maximum:    {max(results):.2f} ms")
+    print(f"P50:        {percentile(results, 50):.2f} ms")
+    print(f"P95:        {percentile(results, 95):.2f} ms")
+    print(f"P99:        {percentile(results, 99):.2f} ms")
+    print(f"Max:        {max(results):.2f} ms")
 
 
 if __name__ == "__main__":
